@@ -1,0 +1,61 @@
+{
+  "_comment": "Copy next to your logo files, fill in from the intake, then run scripts/build_label.py spec.json -o out/. Values marked TBC are reported as open placeholders.",
+  "spec_version": 1,
+  "template": { "preset": "hopera-sleek-330", "scale": 2 },
+  "language": "en",
+  "beer": {
+    "name": "Beer Name",
+    "name_lines": [],
+    "tagline": "One short line about the beer",
+    "style": "Golden Ale TBC",
+    "abv": 5.0,
+    "volume_ml": 330,
+    "volume_unit": "ml",
+    "e_mark": false
+  },
+  "producer": {
+    "name": "Brewery name TBC",
+    "address": "Street and number, postcode, town (province) TBC",
+    "website": ""
+  },
+  "ingredients": [
+    { "text": "water" },
+    { "text": "barley malt", "allergen": true },
+    { "text": "hops" },
+    { "text": "yeast" }
+  ],
+  "allergen_statement": "",
+  "story": [
+    "Two or three sentences about the beer, the people it is for and the occasion."
+  ],
+  "claims": [],
+  "notes": ["Store in a cool, dark place."],
+  "distributor": { "show": true, "logo": "" },
+  "recycling": { "item": "Can", "code": "ALU 41", "material": "Aluminium, metal collection", "note": "Check your local collection rules." },
+  "best_before": { "show": true },
+  "design": {
+    "palette": "midnight-brass",
+    "fonts": {
+      "display": { "family": "Oswald", "weights": [400, 700], "width": 0.85 },
+      "body": { "family": "Inter", "weights": [400, 700], "width": 1.0 }
+    },
+    "motifs": [
+      { "type": "sunburst" },
+      { "type": "laurel" },
+      { "type": "greek-key" }
+    ],
+    "logo": { "path": "", "size_mm": 0 },
+    "metallic": true,
+    "panel_backdrop": false,
+    "grain": false,
+    "name_case": "upper"
+  },
+  "layout": {
+    "producer_strip": "left",
+    "seam_safe_pct": 3,
+    "margin_mm": 4,
+    "legal_font_mm": 2.5,
+    "body_font_mm": 2.8
+  },
+  "qa": { "min_x_height_mm": 1.2, "x_height_ratio": 0.5 }
+}
