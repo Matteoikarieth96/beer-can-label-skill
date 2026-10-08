@@ -1,0 +1,72 @@
+{
+  "_comment": "Fictional example: the beer, the brewery, the town, the club and the address are invented.",
+  "spec_version": 1,
+  "template": { "preset": "hopera-sleek-330", "scale": 2 },
+  "language": "en",
+  "beer": {
+    "name": "Harbour Lantern",
+    "tagline": "Brewed for fifty years of rowing at dawn",
+    "style": "Session Pale Ale",
+    "abv": 4.6,
+    "volume_ml": 330,
+    "volume_unit": "ml",
+    "e_mark": false
+  },
+  "producer": {
+    "name": "Example Brewing Co.",
+    "address": "1 Example Quay, 00000 Sampletown (XX)",
+    "website": "brewing.example"
+  },
+  "ingredients": [
+    { "text": "water" },
+    { "text": "barley malt", "allergen": true },
+    { "text": "wheat malt", "allergen": true },
+    { "text": "oat flakes", "allergen": true },
+    { "text": "hops" },
+    { "text": "yeast" }
+  ],
+  "story": [
+    "The Sampletown Rowing Club has launched its boats from the old quay every morning for fifty years, guided home by the harbour lantern.",
+    "This light, citrusy pale ale is the toast for the anniversary regatta. Pour it cold, raise it to the crews."
+  ],
+  "claims": ["Unfiltered", "Unpasteurised"],
+  "notes": ["Serve at 6 to 8 °C. Store in a cool, dark place."],
+  "distributor": { "show": true, "logo": "" },
+  "recycling": {
+    "item": "Can",
+    "code": "ALU 41",
+    "material": "Aluminium, metal collection",
+    "note": "Check your local collection rules."
+  },
+  "best_before": { "show": true },
+  "design": {
+    "palette": {
+      "base": "midnight-brass",
+      "bg": "#16304a",
+      "bg2": "#08172a",
+      "secondary": "#5fa8a0"
+    },
+    "fonts": {
+      "display": { "family": "Playfair Display", "weights": [700, 900], "width": 1.05 },
+      "body": { "family": "IBM Plex Sans Condensed", "weights": [400, 700], "width": 0.86 }
+    },
+    "motifs": [
+      { "type": "sunburst", "rays": 48, "opacity": 0.07 },
+      { "type": "roundel", "ring_text": "SAMPLETOWN ROWING CLUB · 50TH REGATTA", "stars": 5 },
+      { "type": "zigzag", "height_mm": 4.5, "lines": 2 },
+      { "type": "waves", "layers": 3, "height_pct": 15, "opacity": 0.4 }
+    ],
+    "logo": { "path": "logo.svg", "size_mm": 0 },
+    "metallic": true,
+    "panel_backdrop": true,
+    "grain": false,
+    "name_case": "upper"
+  },
+  "layout": {
+    "producer_strip": "left",
+    "seam_safe_pct": 3,
+    "margin_mm": 4,
+    "legal_font_mm": 2.5,
+    "body_font_mm": 2.8
+  }
+}

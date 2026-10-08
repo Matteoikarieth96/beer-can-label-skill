@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Build and check the fictional example (no Chrome)
+        run: |
+          python3 scripts/build_label.py examples/fictional/spec.json -o ci-out --no-render
+          python3 scripts/check_label.py examples/fictional/spec.json ci-out/label.svg

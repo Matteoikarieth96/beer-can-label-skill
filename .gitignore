@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# generated outputs (the fictional example's outputs are committed on purpose)
+out/
+ci-out/
+*-label/
+*.rendering.png
+can_front.png
+can_back.png
