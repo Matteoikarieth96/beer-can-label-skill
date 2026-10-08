@@ -7,9 +7,9 @@ from pathlib import Path
 
 from .colors import is_hex
 from .motifs import MOTIFS, validate_motif
+from .safety import text_problem
 
-FONT_RE = re.compile(r"^[A-Za-z0-9 ]{1,40}$")
-CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+FONT_RE = re.compile(r"[A-Za-z0-9 ]{1,40}")  # always used with fullmatch
 MAX_SPEC_BYTES = 256 * 1024
 
 # --------------------------------------------------------------------------- templates
@@ -166,8 +166,9 @@ class _V:
         if not isinstance(value, str):
             self.problems.append(f"{where}: must be text")
             return ""
-        if CONTROL_RE.search(value):
-            self.problems.append(f"{where}: contains control characters")
+        problem = text_problem(value)
+        if problem:
+            self.problems.append(f"{where}: {problem} (one line per field; use list items for paragraphs)")
             return ""
         value = value.strip()
         if len(value) > maxlen:
@@ -206,7 +207,7 @@ def validate_font(font, where, v):
         return None
     v.unknown(font, {"family", "weights", "width"}, where)
     family = font.get("family", "")
-    if not isinstance(family, str) or not FONT_RE.match(family):
+    if not isinstance(family, str) or not FONT_RE.fullmatch(family):
         v.problems.append(f"{where}.family: {family!r} is not a valid Google Fonts family name "
                           "(letters, digits and spaces, 1 to 40 characters)")
         return None
@@ -223,6 +224,9 @@ def resolve_template(tpl, v):
     v.unknown(tpl, {"preset", "scale", "width_px", "height_px", "can_diameter_mm", "can_height_mm",
                     "label_height_mm", "distributor_box", "title"}, "template")
     preset = tpl.get("preset", "hopera-sleek-330")
+    if not isinstance(preset, str):
+        v.problems.append("template.preset: must be text")
+        preset = "hopera-sleek-330"
     if preset in PRESETS:
         p = PRESETS[preset]
         scale = tpl.get("scale", 2)
@@ -268,13 +272,23 @@ def validate_spec(raw):
     if not isinstance(raw, dict):
         raise SpecError(["spec must be a JSON object"])
     v.unknown(raw, TOP_KEYS | {"_comment", "$schema"}, "spec")
-    raw = {k: val for k, val in raw.items() if k in TOP_KEYS}
+    raw = copy.deepcopy({k: val for k, val in raw.items() if k in TOP_KEYS})
+    # wrong container types become problems instead of crashes later on
+    for key, default in DEFAULTS.items():
+        if key in raw and isinstance(default, dict) and not isinstance(raw[key], dict):
+            v.problems.append(f"{key}: must be an object")
+            raw.pop(key)
+    design = raw.get("design", {})
+    for key, kinds in (("fonts", (dict,)), ("logo", (dict, str)), ("palette", (dict, str)), ("motifs", (list,))):
+        if key in design and not isinstance(design[key], kinds):
+            v.problems.append(f"design.{key}: wrong type")
+            design.pop(key)
     s = _merge(DEFAULTS, raw)
 
     tpl = resolve_template(s["template"] if isinstance(s["template"], dict) else {}, v)
 
     lang = s.get("language")
-    if lang not in STRINGS:
+    if not isinstance(lang, str) or lang not in STRINGS:
         v.problems.append(f"language: {lang!r} has no built-in strings (use en or it, then override text in 'strings')")
         lang = "en"
     s["language"] = lang
@@ -368,7 +382,11 @@ def validate_spec(raw):
             pal = "midnight-brass"
         pal = dict(PALETTES[pal])
     elif isinstance(pal, dict):
-        base = dict(PALETTES.get(pal.get("base", "midnight-brass"), PALETTES["midnight-brass"]))
+        base_name = pal.get("base", "midnight-brass")
+        if not isinstance(base_name, str) or base_name not in PALETTES:
+            v.problems.append(f"design.palette.base: one of {', '.join(PALETTES)}")
+            base_name = "midnight-brass"
+        base = dict(PALETTES[base_name])
         v.unknown(pal, set(PALETTE_ROLES) | {"base"}, "design.palette")
         for role in PALETTE_ROLES:
             if role in pal:

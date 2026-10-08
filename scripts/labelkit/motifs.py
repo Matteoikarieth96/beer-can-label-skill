@@ -10,6 +10,7 @@ when there is no logo), band (top and bottom), scenery (bottom of the wrap).
 import math
 
 from .colors import darken, is_hex, lighten, mix
+from .safety import text_problem
 
 PALETTE_ROLES = ("bg", "bg2", "primary", "secondary", "text", "muted", "panel")
 
@@ -44,7 +45,7 @@ MOTIFS = {
 
 
 def validate_motif(m, palette=None):
-    if not isinstance(m, dict) or m.get("type") not in MOTIFS:
+    if not isinstance(m, dict) or not isinstance(m.get("type"), str) or m.get("type") not in MOTIFS:
         raise ValueError(f"unknown motif {m.get('type') if isinstance(m, dict) else m!r} "
                          f"(choose from {', '.join(sorted(MOTIFS))})")
     spec = MOTIFS[m["type"]]["params"]
@@ -69,8 +70,9 @@ def validate_motif(m, palette=None):
             if not isinstance(val, bool):
                 raise ValueError(f"{m['type']}.{name}: true or false")
         elif kind == "text":
-            if not isinstance(val, str) or len(val) > rule[1] or any(ord(c) < 32 for c in val):
-                raise ValueError(f"{m['type']}.{name}: text up to {rule[1]} characters")
+            if not isinstance(val, str) or len(val) > rule[1] or text_problem(val):
+                raise ValueError(f"{m['type']}.{name}: one line of text up to {rule[1]} characters "
+                                 "(no line breaks, tabs or control characters)")
         out[name] = val
     return {"type": m["type"], "params": out}
 

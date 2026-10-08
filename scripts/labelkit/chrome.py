@@ -13,6 +13,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from .safety import UnsafeInput, atomic_write
+
 MAC_PATHS = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -91,12 +93,19 @@ def png_size(path):
 
 
 def screenshot(chrome, url_or_path, png_path, width, height, budget_ms=10000, timeout=120, webgl=False):
-    """Render a page at exactly width x height CSS pixels (device scale 1) to png_path."""
-    profile = tempfile.mkdtemp(prefix="bcl-chrome-")
+    """Render a page at exactly width x height CSS pixels (device scale 1) to png_path.
+
+    Chrome writes into a fresh private temp folder (mkdtemp, mode 0700); the PNG
+    is then installed with atomic_write, which refuses symlinks. Nothing is
+    written in the output folder under a predictable temp name. The SwiftShader
+    flags (software WebGL) are only used for the 3D snapshot (webgl=True).
+    """
     png_path = Path(png_path)
-    tmp_png = png_path.with_name(png_path.stem + ".rendering.png")
-    if tmp_png.exists():
-        tmp_png.unlink()
+    if png_path.is_symlink():
+        raise UnsafeInput(f"refusing to write through the symbolic link {png_path}")
+    profile = tempfile.mkdtemp(prefix="bcl-chrome-")
+    work = tempfile.mkdtemp(prefix="bcl-shot-")
+    tmp_png = Path(work) / "shot.png"
     target = url_or_path if "://" in str(url_or_path) else Path(url_or_path).resolve().as_uri()
     gpu = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] if webgl \
         else ["--disable-gpu"]
@@ -119,9 +128,11 @@ def screenshot(chrome, url_or_path, png_path, width, height, budget_ms=10000, ti
                     break
         finally:
             _stop(proc)
-        if not tmp_png.exists():
+        if not tmp_png.is_file() or tmp_png.is_symlink():
             raise RuntimeError("headless Chrome did not write a screenshot")
-        tmp_png.replace(png_path)
-        return png_size(png_path)
+        size = png_size(tmp_png)
+        atomic_write(png_path, tmp_png.read_bytes())
+        return size
     finally:
         shutil.rmtree(profile, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)

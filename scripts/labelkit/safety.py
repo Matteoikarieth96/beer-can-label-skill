@@ -1,37 +1,54 @@
-"""Input safety: escaping, path containment, logo loading and SVG sanitizing.
+"""Input safety: escaping, text checks, path containment, safe writes, logo loading and SVG sanitizing.
 
 Every logo is untrusted data. PNG and JPEG files are checked by magic bytes and
-embedded as base64 data URIs. SVG logos are parsed, reduced to a whitelist of
-drawing elements and attributes, and then embedded as an <image> data URI (never
-inlined), so even a missed construct cannot run script or fetch anything.
+header dimensions and embedded as base64 data URIs. SVG logos are parsed with a
+guarded parser (UTF-8 only, no DOCTYPE or entities, nesting depth capped),
+reduced to a whitelist of drawing elements and attributes, and then embedded as
+an <image> data URI (never inlined), so even a missed construct cannot run
+script or fetch anything.
+
+Every output file goes through atomic_write: it refuses to write through a
+symbolic link and replaces the target with os.replace from a fresh temp file.
 """
 import base64
 import html
+import os
 import re
 import struct
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from xml.parsers import expat
 
 MAX_LOGO_BYTES = 5 * 1024 * 1024
 MAX_LOGO_PIXELS = 12000  # per side, for PNG/JPEG headers
+MAX_XML_DEPTH = 64
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 
+# <style> and <image> are not allowed in logos: CSS has too many ways to fetch
+# (escapes, @import, image-set), and a nested raster would bypass the size cap.
 ALLOWED_TAGS = {
     "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
     "text", "tspan", "textPath", "defs", "linearGradient", "radialGradient", "stop",
-    "clipPath", "mask", "pattern", "symbol", "use", "title", "desc", "style", "image",
+    "clipPath", "mask", "pattern", "symbol", "use", "title", "desc",
     "filter", "feGaussianBlur", "feOffset", "feBlend", "feColorMatrix", "feComposite",
     "feFlood", "feMerge", "feMergeNode", "feMorphology", "feDropShadow",
 }
-# Dropped with their children: script, foreignObject, iframe, animation elements
-# (which can rewrite href at runtime), feImage (fetches URLs), a, metadata, etc.
+ALLOWED_XML_ATTRS = {"space", "lang"}
+# Dropped with their children: script, style, image, foreignObject, iframe,
+# animation elements (which can rewrite href at runtime), feImage (fetches URLs),
+# a, metadata, etc.
 EXTERNAL_URL_RE = re.compile(r"url\(\s*['\"]?\s*(?!#)", re.I)
-BAD_VALUE_RE = re.compile(r"(javascript|vbscript|livescript)\s*:|expression\s*\(|@import", re.I)
-DATA_IMAGE_RE = re.compile(r"^data:image/(png|jpeg);base64,[A-Za-z0-9+/=\s]+$")
+BAD_VALUE_RE = re.compile(
+    r"\\|(javascript|vbscript|livescript)\s*:|expression|@import|image-set|image\s*\(|src\s*\(|"
+    r"-moz-binding|behavior|data:", re.I)
+BAD_STYLE_RE = re.compile(r"[\\@]|url\s*\(|image-set|image\s*\(|src\s*\(|expression|-moz-binding|behavior", re.I)
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# Allowed in single-line label text: XML 1.0 characters minus tab/CR/LF, minus DEL and C1 controls.
+TEXT_ALLOWED_RE = re.compile("[\u0020-\u007e\u00a0-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]*")
 
 
 class UnsafeInput(ValueError):
@@ -42,6 +59,23 @@ def esc(value):
     """Escape text for SVG/HTML text nodes and attribute values."""
     return html.escape(str(value), quote=True)
 
+
+def text_problem(value):
+    """Why a single-line text value is refused, or None when it is fine.
+
+    Refuses line breaks, tabs and other control characters, unpaired surrogates
+    and characters that XML 1.0 does not allow (U+FFFE, U+FFFF, ...).
+    """
+    if not TEXT_ALLOWED_RE.fullmatch(value):
+        return "contains line breaks, tabs, control characters or characters not allowed in XML"
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return "contains an unpaired surrogate"
+    return None
+
+
+# ---------------------------------------------------------------- paths and writes
 
 def resolve_inside(base_dir, rel_path, what="file"):
     """Resolve rel_path against base_dir and refuse anything that escapes it."""
@@ -76,6 +110,99 @@ def ensure_output_dir(out_dir, allowed_roots):
     return out
 
 
+def refuse_symlinks(folder, names):
+    """Refuse to start when any output we are about to write is a symlink (dangling ones included)."""
+    for name in names:
+        p = Path(folder) / name
+        if p.is_symlink():
+            raise UnsafeInput(f"{p} is a symbolic link; remove it before building (outputs never follow links)")
+        if os.path.lexists(p) and not p.is_file():
+            raise UnsafeInput(f"{p} exists and is not a regular file")
+
+
+def atomic_write(path, data):
+    """Write bytes or text to path without ever following a symlink.
+
+    The data goes to a new temp file in the same folder (created with O_EXCL,
+    mode 0600), then os.replace swaps it in. os.replace replaces a directory
+    entry and never writes through a link, so a link planted after the check
+    is replaced, not followed.
+    """
+    path = Path(path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    if path.is_symlink():
+        raise UnsafeInput(f"refusing to write through the symbolic link {path}")
+    if os.path.lexists(path) and not path.is_file():
+        raise UnsafeInput(f"refusing to replace {path}: not a regular file")
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+# ---------------------------------------------------------------- guarded XML parsing
+
+def parse_xml(data, what="SVG", max_depth=MAX_XML_DEPTH):
+    """Parse untrusted XML bytes and return the root element.
+
+    UTF-8 only (NUL bytes refused, so BOM-less UTF-16 cannot slip through), no
+    DOCTYPE or ENTITY declarations (checked in the text and again by expat
+    handlers), nesting depth capped. Raises UnsafeInput.
+    """
+    if b"\x00" in data:
+        raise UnsafeInput(f"{what} contains NUL bytes (UTF-16 or binary data); re-export it as UTF-8")
+    try:
+        # UTF-8 only: another encoding (UTF-16 with a BOM, for instance) could hide a DOCTYPE from the text scan below
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise UnsafeInput(f"{what} is not UTF-8 encoded; re-export it as UTF-8") from None
+    if re.search(r"<!DOCTYPE|<!ENTITY", text, re.I) or \
+            re.match(r"\s*\ufeff?<\?xml[^>]*encoding\s*=\s*[\"'](?!utf-?8)", text, re.I):
+        raise UnsafeInput(f"{what} contains a DOCTYPE or ENTITY declaration or a non-UTF-8 encoding; refused")
+
+    p = expat.ParserCreate(encoding="UTF-8")
+    p.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    depth = [0]
+
+    def start(name, attrs):
+        depth[0] += 1
+        if depth[0] > max_depth:
+            raise UnsafeInput(f"{what} nests elements deeper than {max_depth} levels; refused")
+
+    def end(name):
+        depth[0] -= 1
+
+    def refuse(*_args):
+        raise UnsafeInput(f"{what} contains a DOCTYPE or ENTITY declaration; refused")
+
+    p.StartElementHandler = start
+    p.EndElementHandler = end
+    p.StartDoctypeDeclHandler = refuse
+    p.EntityDeclHandler = refuse
+    p.UnparsedEntityDeclHandler = refuse
+    p.ExternalEntityRefHandler = refuse
+    try:
+        p.Parse(data, True)
+    except expat.ExpatError as exc:
+        raise UnsafeInput(f"{what} is not well-formed XML: {exc}") from None
+    parser = ET.XMLParser(encoding="utf-8")
+    try:
+        parser.feed(data)
+        return parser.close()
+    except ET.ParseError as exc:
+        raise UnsafeInput(f"{what} is not well-formed XML: {exc}") from None
+
+
 # ---------------------------------------------------------------- raster logos
 
 def _png_size(data):
@@ -84,22 +211,56 @@ def _png_size(data):
     return struct.unpack(">II", data[16:24])
 
 
+SOF_MARKERS = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+STANDALONE_MARKERS = {0x01, 0xD8} | set(range(0xD0, 0xD8))
+
+
 def _jpeg_size(data):
-    i = 2
-    while i + 9 < len(data):
+    """Walk the JPEG markers the way libjpeg does and return the first SOF size.
+
+    0xFF fill bytes before a marker are skipped; standalone markers (SOI, RST,
+    TEM) have no length; entropy-coded data after SOS is skipped up to the next
+    real marker. Every SOF must be inside the size cap, not only the first.
+    """
+    n = len(data)
+    if n < 4 or data[0] != 0xFF or data[1] != 0xD8:
+        raise UnsafeInput("JPEG does not start with SOI")
+    i, sizes = 2, []
+    while i < n:
         if data[i] != 0xFF:
+            raise UnsafeInput("JPEG marker structure is malformed")
+        while i < n and data[i] == 0xFF:  # fill bytes
             i += 1
+        if i >= n:
+            break
+        marker = data[i]
+        i += 1
+        if marker == 0x00:
+            raise UnsafeInput("JPEG marker structure is malformed")
+        if marker == 0xD9:  # EOI
+            break
+        if marker in STANDALONE_MARKERS:
             continue
-        marker = data[i + 1]
-        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
-            i += 2
-            continue
-        seg_len = struct.unpack(">H", data[i + 2:i + 4])[0]
-        if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
-            h, w = struct.unpack(">HH", data[i + 5:i + 9])
-            return w, h
-        i += 2 + seg_len
-    raise UnsafeInput("JPEG has no size header")
+        if i + 2 > n:
+            raise UnsafeInput("JPEG segment is truncated")
+        seg_len = struct.unpack(">H", data[i:i + 2])[0]
+        if seg_len < 2 or i + seg_len > n:
+            raise UnsafeInput("JPEG segment length is invalid")
+        if marker in SOF_MARKERS:
+            if seg_len < 7:
+                raise UnsafeInput("JPEG frame header is truncated")
+            h, w = struct.unpack(">HH", data[i + 3:i + 7])
+            if not (0 < w <= MAX_LOGO_PIXELS and 0 < h <= MAX_LOGO_PIXELS):
+                raise UnsafeInput(f"JPEG frame size {w}x{h} is out of range")
+            sizes.append((w, h))
+        i += seg_len
+        if marker == 0xDA:  # SOS: skip entropy-coded data to the next real marker
+            while i + 1 < n and not (data[i] == 0xFF and data[i + 1] not in (0x00, 0xFF)
+                                     and not 0xD0 <= data[i + 1] <= 0xD7):
+                i += 1
+    if not sizes:
+        raise UnsafeInput("JPEG has no frame header")
+    return sizes[0]
 
 
 # ---------------------------------------------------------------- SVG logos
@@ -115,26 +276,19 @@ def _ns(tag):
 def sanitize_svg(data):
     """Return (clean_svg_bytes, report). Raises UnsafeInput on refusal.
 
-    Refused outright: DOCTYPE or ENTITY declarations (entity expansion and
-    external entities), non-SVG roots, unparsable XML. Stripped and reported:
-    script, foreignObject, animation and other non-whitelisted elements, on*
-    event attributes, external href/xlink:href, external url(...) references,
-    javascript:/vbscript:/expression() values, <style> blocks with @import or
-    external url().
+    Refused outright: NUL bytes or non-UTF-8 data, DOCTYPE or ENTITY
+    declarations, nesting deeper than 64 levels, non-SVG roots, unparsable XML.
+    Stripped and reported: script, style, image, foreignObject, animation and
+    other non-whitelisted elements; on* event attributes; xml:base and other
+    xml: attributes except xml:space and xml:lang; href/xlink:href that are not
+    #internal; any value with a backslash (CSS escapes), url(...) to anything
+    but #id, @import, image-set(), image(), src(), expression, -moz-binding,
+    behavior, data: or script URLs; style attributes containing @, url(, a
+    backslash or the functions above.
     """
     if len(data) > MAX_LOGO_BYTES:
         raise UnsafeInput("SVG logo is larger than 5 MB")
-    try:
-        # UTF-8 only: another encoding (UTF-16 with a BOM, for instance) could hide a DOCTYPE from the text scan below
-        head = data.decode("utf-8")
-    except UnicodeDecodeError:
-        raise UnsafeInput("SVG logo is not UTF-8 encoded; re-export it as UTF-8") from None
-    if re.search(r"<!DOCTYPE|<!ENTITY|encoding\s*=\s*[\"'](?!utf-?8)", head, re.I):
-        raise UnsafeInput("SVG logo contains a DOCTYPE or ENTITY declaration; refused")
-    try:
-        root = ET.fromstring(data)
-    except ET.ParseError as exc:
-        raise UnsafeInput(f"SVG logo is not well-formed XML: {exc}") from None
+    root = parse_xml(data, "SVG logo")
     if _local(root.tag) != "svg" or _ns(root.tag) not in ("", SVG_NS):
         raise UnsafeInput("logo root element is not <svg>")
 
@@ -150,12 +304,6 @@ def sanitize_svg(data):
                 report.append(f"removed <{name}>")
                 el.remove(child)
                 continue
-            if name == "style":
-                css = child.text or ""
-                if EXTERNAL_URL_RE.search(css) or BAD_VALUE_RE.search(css):
-                    report.append("removed <style> with @import, external url() or script")
-                    el.remove(child)
-                    continue
             clean_attrs(child)
             clean(child)
 
@@ -169,16 +317,24 @@ def sanitize_svg(data):
                 report.append(f"removed {local} handler on <{name}>")
                 del el.attrib[attr]
                 continue
-            if ns not in ("", XLINK_NS, XML_NS):
+            if ns == XML_NS:
+                if local not in ALLOWED_XML_ATTRS:
+                    report.append(f"removed xml:{local} on <{name}>")
+                    del el.attrib[attr]
+                continue
+            if ns not in ("", XLINK_NS):
                 del el.attrib[attr]  # editor metadata (inkscape:, sodipodi:, ...)
                 continue
             if local == "href":
-                ok = value.startswith("#") or (name == "image" and DATA_IMAGE_RE.match(value))
-                if not ok:
+                if not value.startswith("#") or BAD_VALUE_RE.search(value):
                     report.append(f"removed external href on <{name}>")
                     del el.attrib[attr]
                 continue
-            if BAD_VALUE_RE.search(value) or EXTERNAL_URL_RE.search(value) or "data:" in value.lower():
+            if local == "style" and BAD_STYLE_RE.search(value):
+                report.append(f"removed style attribute with url(), @, escapes or fetching functions on <{name}>")
+                del el.attrib[attr]
+                continue
+            if BAD_VALUE_RE.search(value) or EXTERNAL_URL_RE.search(value):
                 report.append(f"removed unsafe {local} on <{name}>")
                 del el.attrib[attr]
 
@@ -191,7 +347,7 @@ def sanitize_svg(data):
 
 
 def svg_aspect(svg_bytes):
-    root = ET.fromstring(svg_bytes)
+    root = parse_xml(svg_bytes, "SVG logo")
     vb = root.attrib.get("viewBox", "").replace(",", " ").split()
     try:
         if len(vb) == 4:

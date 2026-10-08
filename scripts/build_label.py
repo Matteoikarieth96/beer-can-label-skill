@@ -19,7 +19,6 @@ import html as htmllib
 import re
 import sys
 import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -27,7 +26,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from labelkit import chrome  # noqa: E402
 from labelkit.compose import compose  # noqa: E402
 from labelkit.preview import build_preview, json_for_script  # noqa: E402
-from labelkit.safety import UnsafeInput, ensure_output_dir, load_logo  # noqa: E402
+from labelkit.safety import (UnsafeInput, atomic_write, ensure_output_dir, load_logo, parse_xml,  # noqa: E402
+                             refuse_symlinks)
+
+OUTPUT_NAMES = ("label.svg", "label.html", "label.png", "can_preview.html")
 from labelkit.spec import SpecError, load_spec, placeholders  # noqa: E402
 
 FIT_SCRIPT = r"""
@@ -111,7 +113,7 @@ def fit_with_chrome(chrome_bin, label, svg, workdir):
              f'<script type="application/json" id="fitcfg">{json_for_script(cfg)}</script>\n'
              f"<script>{FIT_SCRIPT}</script>\n")
     fit_html = Path(workdir) / "fit.html"
-    fit_html.write_text(page(label, svg, extra), encoding="utf-8")
+    atomic_write(fit_html, page(label, svg, extra))  # fresh private temp dir, still never via a link
     dom = chrome.dump_dom(chrome_bin, fit_html)
     m = re.search(r'<textarea id="fitout"[^>]*>(.*?)</textarea>', dom, re.S)
     if not m:
@@ -119,8 +121,25 @@ def fit_with_chrome(chrome_bin, label, svg, workdir):
     fitted = htmllib.unescape(m.group(1))
     if not fitted.startswith("<svg"):
         raise RuntimeError(f"fit pass failed: {fitted[:200]}")
-    ET.fromstring(fitted.encode("utf-8"))  # must be well-formed XML
+    parse_xml(fitted.encode("utf-8"), "fitted SVG")  # must be well-formed, guarded XML
     return fitted
+
+
+def fonts_missing_warning(svg):
+    """Warning text when the fit pass flagged missing web fonts on the root <svg>, else None.
+
+    Read from the parsed root element only, so label text that merely contains
+    'data-fonts-missing="..."' cannot inject a warning line.
+    """
+    try:
+        root = parse_xml(svg.encode("utf-8"), "SVG")
+    except UnsafeInput:
+        return None
+    missing = root.get("data-fonts-missing")
+    if not missing:
+        return None
+    return (f"web fonts did not load ({missing}); the PNG uses a fallback font. "
+            "Check the family names on fonts.google.com and your network.")
 
 
 def main(argv=None):
@@ -135,6 +154,7 @@ def main(argv=None):
     try:
         spec, tpl, warnings = load_spec(spec_path)
         out = ensure_output_dir(args.out, [spec_path.parent, Path.cwd()])
+        refuse_symlinks(out, OUTPUT_NAMES)
         assets = {}
         if spec["design"]["logo"]["path"]:
             assets["logo"] = load_logo(spec_path.parent, spec["design"]["logo"]["path"], "design.logo")
@@ -164,15 +184,18 @@ def main(argv=None):
         with tempfile.TemporaryDirectory(prefix="bcl-fit-") as work:
             try:
                 svg = fit_with_chrome(chrome_bin, label, svg, work)
-                miss = re.search(r'data-fonts-missing="([^"]*)"', svg)
-                if miss:
-                    warnings.append(f"web fonts did not load ({miss.group(1)}); the PNG uses a fallback font. "
-                                    "Check the family names on fonts.google.com and your network.")
-            except (RuntimeError, ET.ParseError, OSError) as exc:
+                warn = fonts_missing_warning(svg)
+                if warn:
+                    warnings.append(warn)
+            except (RuntimeError, UnsafeInput, OSError) as exc:
                 warnings.append(f"font-accurate fitting skipped: {exc}")
 
-    (out / "label.svg").write_text(svg, encoding="utf-8")
-    (out / "label.html").write_text(page(label, svg), encoding="utf-8")
+    try:
+        atomic_write(out / "label.svg", svg)
+        atomic_write(out / "label.html", page(label, svg))
+    except (UnsafeInput, OSError) as exc:
+        print(f"Refused: {exc}", file=sys.stderr)
+        return 2
     png = out / "label.png"
     status = 0
     if chrome_bin:
@@ -181,10 +204,14 @@ def main(argv=None):
             if (w, h) != (tpl["width_px"], tpl["height_px"]):
                 print(f"ERROR: label.png is {w}x{h}, expected {tpl['width_px']}x{tpl['height_px']}", file=sys.stderr)
                 status = 3
-        except (RuntimeError, OSError) as exc:
+        except (RuntimeError, UnsafeInput, OSError) as exc:
             print(f"ERROR: PNG render failed: {exc}", file=sys.stderr)
             status = 3
-    build_preview(out, spec, tpl, png if png.exists() and chrome_bin else None, svg)
+    try:
+        build_preview(out, spec, tpl, png if png.exists() and chrome_bin else None, svg)
+    except (UnsafeInput, OSError) as exc:
+        print(f"Refused: {exc}", file=sys.stderr)
+        return 2
 
     print(f"Template: {tpl['title']}, {tpl['width_px']} x {tpl['height_px']} px, "
           f"{tpl['px_per_mm']:.2f} px/mm, can {tpl['can_diameter_mm']:g} mm")
