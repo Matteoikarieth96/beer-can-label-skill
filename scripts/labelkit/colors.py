@@ -1,11 +1,11 @@
 """Colour helpers: hex parsing, mixing and WCAG contrast."""
 import re
 
-HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}")  # always used with fullmatch
 
 
 def is_hex(value):
-    return isinstance(value, str) and bool(HEX_RE.match(value))
+    return isinstance(value, str) and bool(HEX_RE.fullmatch(value))
 
 
 def to_rgb(hex_color):

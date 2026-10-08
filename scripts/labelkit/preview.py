@@ -9,13 +9,15 @@ escaped, and the page writes user text with textContent only.
 """
 import base64
 import json
+import re
 from pathlib import Path
 
-from .safety import esc
+from .safety import atomic_write, esc
 
 THREE_URL = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
 THREE_SRI = "sha512-dLxUelApnYxpLt6K2iomGngnHO83iUvZytA3YjDUCjT0HDOHKXnVYdf3hU4JjM8uEhxf9nD1/ey98U3t2vZ0qQ=="
 MAX_EMBED_BYTES = 12 * 1024 * 1024
+TOKEN_RE = re.compile(r"__(TITLE|CONFIG|THREE_URL|THREE_SRI|IMG)__")
 
 PAGE = """<!doctype html>
 <html lang="en">
@@ -246,7 +248,8 @@ def json_for_script(obj):
 
 def build_preview(out_dir, spec, tpl, png_path=None, svg_text=None):
     """Write can_preview.html. Uses label.png when present, else the SVG."""
-    if png_path and Path(png_path).is_file() and Path(png_path).stat().st_size <= MAX_EMBED_BYTES:
+    png_ok = png_path and Path(png_path).is_file() and not Path(png_path).is_symlink()
+    if png_ok and Path(png_path).stat().st_size <= MAX_EMBED_BYTES:
         img = "data:image/png;base64," + base64.b64encode(Path(png_path).read_bytes()).decode("ascii")
     elif svg_text is not None:
         img = "data:image/svg+xml;base64," + base64.b64encode(svg_text.encode("utf-8")).decode("ascii")
@@ -258,11 +261,10 @@ def build_preview(out_dir, spec, tpl, png_path=None, svg_text=None):
         "views": {"front": 0.5, "left": 0.2, "right": 0.8, "back": 0.0},
         "autoSpin": True,
     }
-    html = (PAGE.replace("__TITLE__", esc(cfg["title"]))
-            .replace("__CONFIG__", json_for_script(cfg))
-            .replace("__THREE_URL__", THREE_URL)
-            .replace("__THREE_SRI__", THREE_SRI)
-            .replace("__IMG__", esc(img)))
+    values = {"TITLE": esc(cfg["title"]), "CONFIG": json_for_script(cfg), "THREE_URL": THREE_URL,
+              "THREE_SRI": THREE_SRI, "IMG": esc(img)}
+    # one pass: substituted values are never scanned again for tokens
+    html = TOKEN_RE.sub(lambda m: values[m.group(1)], PAGE)
     out = Path(out_dir) / "can_preview.html"
-    out.write_text(html, encoding="utf-8")
+    atomic_write(out, html)
     return out

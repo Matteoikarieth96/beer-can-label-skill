@@ -15,12 +15,12 @@ import json
 import math
 import re
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from labelkit.colors import contrast, is_hex  # noqa: E402
+from labelkit.safety import UnsafeInput, parse_xml  # noqa: E402
 from labelkit.spec import SpecError, load_spec, placeholders  # noqa: E402
 from labelkit.textfit import est_width  # noqa: E402
 
@@ -168,12 +168,10 @@ def check(spec_path, svg_path):
     data = Path(svg_path).read_bytes()
     if len(data) > MAX_SVG_BYTES:
         return {"errors": ["SVG is larger than 40 MB"], "warnings": [], "info": []}
-    if re.search(rb"<!DOCTYPE|<!ENTITY", data, re.I):
-        return {"errors": ["SVG contains a DOCTYPE or ENTITY declaration; refused"], "warnings": [], "info": []}
     try:
-        root = ET.fromstring(data)
-    except ET.ParseError as exc:
-        return {"errors": [f"SVG is not well-formed: {exc}"], "warnings": [], "info": []}
+        root = parse_xml(data, "SVG")  # UTF-8 only, no DOCTYPE/ENTITY, depth capped
+    except UnsafeInput as exc:
+        return {"errors": [str(exc)], "warnings": [], "info": []}
 
     W, H = tpl["width_px"], tpl["height_px"]
     ppm = tpl["px_per_mm"]

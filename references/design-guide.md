@@ -78,7 +78,7 @@ Describe two or three directions in words before building. Each direction names:
 
 ## 8. Logos
 
-- Prefer SVG. SVG logos are sanitized (scripts, event handlers, external references and entities removed or refused) and embedded as an image, so their own fonts must be converted to outlines by the designer.
+- Prefer SVG. SVG logos are sanitized (scripts, `<style>` blocks, embedded bitmaps, event handlers, external references and entities removed or refused) and embedded as an image, so their own fonts must be converted to outlines and their colours set with presentation attributes (`fill="#c8553d"`, `fill="url(#gradient)"`), not CSS.
 - PNG/JPEG: at least 600 px on the long side for a 35 mm emblem at 2x.
 - Third-party logos (distributor, certification marks, recycling marks) come from their owner. The builder leaves a dashed placeholder box for the distributor.
 

@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from labelkit import chrome  # noqa: E402
-from labelkit.safety import UnsafeInput, ensure_output_dir  # noqa: E402
+from labelkit.safety import UnsafeInput, ensure_output_dir, refuse_symlinks  # noqa: E402
 
 VIEWS = {"front": 0.5, "three-quarter": 0.45, "left": 0.2, "right": 0.8, "back": 0.0}
 
@@ -36,7 +36,7 @@ def main(argv=None):
     if not html.is_file() or html.suffix.lower() != ".html":
         print("Refused: the input must be an existing .html file", file=sys.stderr)
         return 2
-    m = re.match(r"^(\d{2,4})x(\d{2,4})$", args.size)
+    m = re.fullmatch(r"(\d{2,4})x(\d{2,4})", args.size)
     if not m:
         print("Refused: --size must look like 1000x820", file=sys.stderr)
         return 2
@@ -47,6 +47,7 @@ def main(argv=None):
     out = Path(args.out).expanduser()
     try:
         folder = ensure_output_dir(out.parent, [html.parent, Path.cwd()])
+        refuse_symlinks(folder, [out.name])
     except UnsafeInput as exc:
         print(f"Refused: {exc}", file=sys.stderr)
         return 2
@@ -55,8 +56,12 @@ def main(argv=None):
         print("Chrome or Chromium not found (set CHROME_PATH)", file=sys.stderr)
         return 3
     url = f"{html.as_uri()}#u={u:.3f}&spin=0"
-    w, h = chrome.screenshot(exe, url, folder / out.name, int(m.group(1)), int(m.group(2)),
-                             budget_ms=15000, webgl=True)
+    try:
+        w, h = chrome.screenshot(exe, url, folder / out.name, int(m.group(1)), int(m.group(2)),
+                                 budget_ms=15000, webgl=True)
+    except (UnsafeInput, RuntimeError, OSError) as exc:
+        print(f"Refused or failed: {exc}", file=sys.stderr)
+        return 3
     print(f"wrote {folder / out.name} ({w} x {h}). Check it: without WebGL the page shows the flat label.")
     return 0
 

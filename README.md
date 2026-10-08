@@ -103,7 +103,7 @@ The skill never uploads files or submits forms for you. More in [references/hope
 
 ## Security
 
-Logos, spec text and file paths are treated as untrusted. Text is escaped; SVG logos are sanitized (scripts, event handlers, `foreignObject`, external references and entity declarations removed or refused) and embedded as images, never inlined; logo paths must stay inside the spec folder; font names are whitelisted; Chrome runs with a throwaway profile and argument lists; three.js is pinned with Subresource Integrity. Details and residual risks: [SECURITY.md](SECURITY.md).
+Logos, spec text and file paths are treated as untrusted. Text is escaped and must be single-line valid XML text; SVG logos are parsed with a guarded parser (UTF-8 only, no DOCTYPE or entities, depth capped), sanitized (scripts, styles, nested images, event handlers, `foreignObject`, `xml:base`, CSS escapes and external references removed, every removal reported) and embedded as images, never inlined; JPEG headers are walked like libjpeg; logo paths must stay inside the spec folder; outputs are written atomically and never through symlinks; font names are whitelisted; Chrome runs with a throwaway profile, argument lists and a private temp folder; three.js is pinned with Subresource Integrity. Details and residual risks: [SECURITY.md](SECURITY.md).
 
 ## Limitations
 
