@@ -123,6 +123,13 @@ python3 -m unittest discover -s tests -v
 
 The suite covers spec validation, text and markup injection, malicious SVG logos, path traversal, font names and the QA checks. CI runs it on every push and pull request.
 
+## More skills
+
+- [evm-dd](https://github.com/Matteoikarieth96/evm-dd-skill): investor-angle due diligence on crypto and EVM projects, with a scored report and an A4 one-pager
+- [hiring-prep](https://github.com/Matteoikarieth96/hiring-prep-skill): an interview prep page from a company, a role and your resume, with an interactive test
+- [3d-print-design](https://github.com/Matteoikarieth96/3d-print-design-skill): parametric parts for FDM 3D printing, checked before export
+- [whiteboard-video](https://github.com/Matteoikarieth96/whiteboard-video-skill): hand-drawn whiteboard explainer videos with voice-over
+
 ## Licence
 
 MIT, see [LICENSE](LICENSE).
