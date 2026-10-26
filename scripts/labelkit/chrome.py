@@ -37,7 +37,7 @@ def find_chrome(explicit=None):
 
 
 def _base_args(chrome, profile):
-    return [chrome, "--headless=new", "--hide-scrollbars", f"--user-data-dir={profile}", "--no-first-run",
+    return [chrome, "--headless=new", "--use-mock-keychain", "--password-store=basic", "--hide-scrollbars", f"--user-data-dir={profile}", "--no-first-run",
             "--no-default-browser-check", "--disable-extensions", "--disable-background-networking",
             "--disable-component-update", "--disable-sync", "--mute-audio"]
 
